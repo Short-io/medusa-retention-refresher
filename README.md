@@ -31,7 +31,7 @@ go build -o medusa-retention-refresher .
 Pre-built images are available from GitHub Container Registry:
 
 ```bash
-docker pull ghcr.io/<owner>/medusa-retention-refresher:latest
+docker pull ghcr.io/short-io/medusa-retention-refresher:latest
 ```
 
 Run with Docker:
@@ -40,7 +40,7 @@ docker run --rm \
   -e AWS_ACCESS_KEY_ID \
   -e AWS_SECRET_ACCESS_KEY \
   -e AWS_REGION \
-  ghcr.io/<owner>/medusa-retention-refresher:latest \
+  ghcr.io/short-io/medusa-retention-refresher:latest \
   -bucket my-backups -cluster prod-cassandra -retention 30
 ```
 
@@ -62,7 +62,7 @@ spec:
           serviceAccountName: medusa-retention-refresher
           containers:
           - name: refresher
-            image: ghcr.io/<owner>/medusa-retention-refresher:latest
+            image: ghcr.io/short-io/medusa-retention-refresher:latest
             args:
             - -bucket=my-backups
             - -cluster=prod-cassandra
