@@ -20,8 +20,72 @@ The tool:
 
 ## Installation
 
+### From Source
+
 ```bash
 go build -o medusa-retention-refresher .
+```
+
+### Docker
+
+Pre-built images are available from GitHub Container Registry:
+
+```bash
+docker pull ghcr.io/<owner>/medusa-retention-refresher:latest
+```
+
+Run with Docker:
+```bash
+docker run --rm \
+  -e AWS_ACCESS_KEY_ID \
+  -e AWS_SECRET_ACCESS_KEY \
+  -e AWS_REGION \
+  ghcr.io/<owner>/medusa-retention-refresher:latest \
+  -bucket my-backups -cluster prod-cassandra -retention 30
+```
+
+### Kubernetes
+
+Deploy as a CronJob for scheduled retention updates:
+
+```yaml
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: medusa-retention-refresher
+spec:
+  schedule: "0 2 * * *"  # Run daily at 2 AM
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          serviceAccountName: medusa-retention-refresher
+          containers:
+          - name: refresher
+            image: ghcr.io/<owner>/medusa-retention-refresher:latest
+            args:
+            - -bucket=my-backups
+            - -cluster=prod-cassandra
+            - -retention=30
+            env:
+            - name: AWS_REGION
+              value: us-east-1
+          restartPolicy: OnFailure
+```
+
+For AWS authentication in Kubernetes, use one of:
+- **IAM Roles for Service Accounts (IRSA)** on EKS - recommended
+- **Pod Identity** on EKS
+- **Secret with AWS credentials** - create a Secret and mount as environment variables
+
+Example with IRSA (annotate the ServiceAccount):
+```yaml
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: medusa-retention-refresher
+  annotations:
+    eks.amazonaws.com/role-arn: arn:aws:iam::123456789012:role/medusa-retention-refresher
 ```
 
 ## Usage
@@ -55,9 +119,16 @@ Apply 90-day retention to all backups:
 
 The tool expects Medusa's default backup structure:
 ```
-<cluster>/<hostname>/<backup-name>/meta/manifest.json
-<cluster>/<hostname>/<backup-name>/data/...
+<cluster>/
+  <hostname>/
+    <backup-name>/
+      meta/
+        manifest.json    # Backup manifest listing all objects
+    data/
+      ...                # Data files (shared across all backups for this host)
 ```
+
+Note: Data files are stored at the hostname level and shared across backups, while each backup has its own manifest that references the relevant data files.
 
 ## IAM Permissions
 
