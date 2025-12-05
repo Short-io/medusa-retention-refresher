@@ -14,57 +14,33 @@ env:
   IMAGE_NAME: ${{ github.repository }}
 
 jobs:
-  build-binaries:
-    name: Build Binaries
+  goreleaser:
+    name: Build and Release
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        include:
-          - goos: linux
-            goarch: amd64
-          - goos: linux
-            goarch: arm64
-          - goos: darwin
-            goarch: amd64
-          - goos: darwin
-            goarch: arm64
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
           go-version: '1.21'
 
-      - name: Build
+      - name: Install Syft
+        uses: anchore/sbom-action/download-syft@v0
+
+      - name: Run GoReleaser
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          distribution: goreleaser
+          version: latest
+          args: release --clean
         env:
-          GOOS: ${{ matrix.goos }}
-          GOARCH: ${{ matrix.goarch }}
-          CGO_ENABLED: 0
-        run: |
-          go build -ldflags="-s -w" -o medusa-retention-refresher-${{ matrix.goos }}-${{ matrix.goarch }} .
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: medusa-retention-refresher-${{ matrix.goos }}-${{ matrix.goarch }}
-          path: medusa-retention-refresher-${{ matrix.goos }}-${{ matrix.goarch }}
-
-  upload-release-assets:
-    name: Upload Release Assets
-    needs: build-binaries
-    runs-on: ubuntu-latest
-    steps:
-      - name: Download all artifacts
-        uses: actions/download-artifact@v4
-        with:
-          path: artifacts
-
-      - name: Upload to release
-        uses: softprops/action-gh-release@v2
-        with:
-          files: artifacts/**/*
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY_OWNER: ${{ github.repository_owner }}
+          GITHUB_REPOSITORY_NAME: ${{ github.event.repository.name }}
 
   build-docker:
     name: Build and Push Docker Image
