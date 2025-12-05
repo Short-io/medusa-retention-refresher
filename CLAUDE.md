@@ -19,10 +19,14 @@ go mod tidy
 
 A CLI utility that refreshes S3 Object Lock retention periods for Cassandra backups created by Medusa. It:
 
-1. Scans an S3 bucket for Medusa backup manifests (`[cluster]/[hostname]/[backup]/meta/manifest.json`)
+1. Scans an S3 bucket for Medusa backup manifests (`[cluster]/[hostname]/[backup_name]/meta/manifest.json`)
 2. Parses each manifest to get the list of backup objects
 3. Checks each object's current retention period
 4. Extends retention to the specified number of days from now if the current retention expires sooner
+
+**Backup structure:**
+- Manifests: `[cluster]/[hostname]/[backup_name]/meta/manifest.json`
+- Data files: `[cluster]/[hostname]/data/...` (shared across all backups)
 
 Uses S3 Object Lock in GOVERNANCE mode.
 

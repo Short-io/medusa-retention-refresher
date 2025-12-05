@@ -16,6 +16,14 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 )
 
+// S3API defines the S3 operations used by this tool
+type S3API interface {
+	GetObject(ctx context.Context, params *s3.GetObjectInput, optFns ...func(*s3.Options)) (*s3.GetObjectOutput, error)
+	GetObjectRetention(ctx context.Context, params *s3.GetObjectRetentionInput, optFns ...func(*s3.Options)) (*s3.GetObjectRetentionOutput, error)
+	PutObjectRetention(ctx context.Context, params *s3.PutObjectRetentionInput, optFns ...func(*s3.Options)) (*s3.PutObjectRetentionOutput, error)
+	ListObjectsV2(ctx context.Context, params *s3.ListObjectsV2Input, optFns ...func(*s3.Options)) (*s3.ListObjectsV2Output, error)
+}
+
 // Manifest represents the structure of manifest.json
 type Manifest struct {
 	Objects []ManifestObject `json:"objects"`
@@ -24,6 +32,32 @@ type Manifest struct {
 // ManifestObject represents an object entry in the manifest
 type ManifestObject struct {
 	Path string `json:"path"`
+}
+
+// extractHostnamePath extracts [cluster]/[hostname]/ from a manifest key
+func extractHostnamePath(manifestKey string) (string, error) {
+	parts := strings.Split(manifestKey, "/")
+	if len(parts) < 4 {
+		return "", fmt.Errorf("invalid manifest path: %s", manifestKey)
+	}
+	return parts[0] + "/" + parts[1] + "/", nil
+}
+
+// parseManifest parses manifest JSON data
+func parseManifest(data []byte) (*Manifest, error) {
+	var manifest Manifest
+	if err := json.Unmarshal(data, &manifest); err != nil {
+		return nil, fmt.Errorf("failed to parse manifest: %w", err)
+	}
+	return &manifest, nil
+}
+
+// needsRetentionUpdate determines if retention should be updated based on current and required dates
+func needsRetentionUpdate(currentRetention *time.Time, requiredUntil time.Time) bool {
+	if currentRetention == nil {
+		return true
+	}
+	return currentRetention.Before(requiredUntil)
 }
 
 func main() {
@@ -65,11 +99,16 @@ func main() {
 			continue
 		}
 
-		// Extract base path from manifest key (remove /meta/manifest.json)
-		basePath := strings.TrimSuffix(manifestKey, "/meta/manifest.json")
+		// Extract hostname path from manifest key: [cluster]/[hostname]/
+		// Data files are stored in a shared directory: [cluster]/[hostname]/data/
+		hostnamePath, err := extractHostnamePath(manifestKey)
+		if err != nil {
+			log.Printf("Invalid manifest path: %s", manifestKey)
+			continue
+		}
 
 		for _, obj := range manifest.Objects {
-			objectKey := basePath + "/" + obj.Path
+			objectKey := hostnamePath + obj.Path
 
 			needsUpdate, err := checkRetention(ctx, client, *bucket, objectKey, retentionUntil)
 			if err != nil {
@@ -96,33 +135,38 @@ func main() {
 }
 
 // findManifests finds all manifest.json files matching the pattern
-func findManifests(ctx context.Context, client *s3.Client, bucket, cluster string) ([]string, error) {
+func findManifests(ctx context.Context, client S3API, bucket, cluster string) ([]string, error) {
 	var manifests []string
 
 	// List all objects under cluster prefix to find hostnames
 	prefix := cluster + "/"
 
-	paginator := s3.NewListObjectsV2Paginator(client, &s3.ListObjectsV2Input{
-		Bucket: aws.String(bucket),
-		Prefix: aws.String(prefix),
-	})
-
 	// Track unique hostname/backup combinations
 	backupPaths := make(map[string]bool)
 
-	for paginator.HasMorePages() {
-		page, err := paginator.NextPage(ctx)
+	var continuationToken *string
+	for {
+		resp, err := client.ListObjectsV2(ctx, &s3.ListObjectsV2Input{
+			Bucket:            aws.String(bucket),
+			Prefix:            aws.String(prefix),
+			ContinuationToken: continuationToken,
+		})
 		if err != nil {
 			return nil, fmt.Errorf("failed to list objects: %w", err)
 		}
 
-		for _, obj := range page.Contents {
+		for _, obj := range resp.Contents {
 			key := *obj.Key
 			// Look for manifest.json files
 			if strings.HasSuffix(key, "/meta/manifest.json") {
 				backupPaths[key] = true
 			}
 		}
+
+		if !aws.ToBool(resp.IsTruncated) {
+			break
+		}
+		continuationToken = resp.NextContinuationToken
 	}
 
 	for path := range backupPaths {
@@ -133,7 +177,7 @@ func findManifests(ctx context.Context, client *s3.Client, bucket, cluster strin
 }
 
 // downloadManifest downloads and parses a manifest.json file
-func downloadManifest(ctx context.Context, client *s3.Client, bucket, key string) (*Manifest, error) {
+func downloadManifest(ctx context.Context, client S3API, bucket, key string) (*Manifest, error) {
 	resp, err := client.GetObject(ctx, &s3.GetObjectInput{
 		Bucket: aws.String(bucket),
 		Key:    aws.String(key),
@@ -148,16 +192,11 @@ func downloadManifest(ctx context.Context, client *s3.Client, bucket, key string
 		return nil, fmt.Errorf("failed to read body: %w", err)
 	}
 
-	var manifest Manifest
-	if err := json.Unmarshal(body, &manifest); err != nil {
-		return nil, fmt.Errorf("failed to parse manifest: %w", err)
-	}
-
-	return &manifest, nil
+	return parseManifest(body)
 }
 
 // checkRetention checks if an object's retention needs to be updated
-func checkRetention(ctx context.Context, client *s3.Client, bucket, key string, requiredUntil time.Time) (bool, error) {
+func checkRetention(ctx context.Context, client S3API, bucket, key string, requiredUntil time.Time) (bool, error) {
 	resp, err := client.GetObjectRetention(ctx, &s3.GetObjectRetentionInput{
 		Bucket: aws.String(bucket),
 		Key:    aws.String(key),
@@ -172,16 +211,16 @@ func checkRetention(ctx context.Context, client *s3.Client, bucket, key string, 
 		return false, err
 	}
 
-	if resp.Retention == nil || resp.Retention.RetainUntilDate == nil {
-		return true, nil
+	var currentRetention *time.Time
+	if resp.Retention != nil && resp.Retention.RetainUntilDate != nil {
+		currentRetention = resp.Retention.RetainUntilDate
 	}
 
-	// Check if current retention is less than required
-	return resp.Retention.RetainUntilDate.Before(requiredUntil), nil
+	return needsRetentionUpdate(currentRetention, requiredUntil), nil
 }
 
 // updateRetention sets the retention for an object
-func updateRetention(ctx context.Context, client *s3.Client, bucket, key string, retainUntil time.Time) error {
+func updateRetention(ctx context.Context, client S3API, bucket, key string, retainUntil time.Time) error {
 	_, err := client.PutObjectRetention(ctx, &s3.PutObjectRetentionInput{
 		Bucket: aws.String(bucket),
 		Key:    aws.String(key),
