@@ -24,14 +24,23 @@ type S3API interface {
 	ListObjectsV2(ctx context.Context, params *s3.ListObjectsV2Input, optFns ...func(*s3.Options)) (*s3.ListObjectsV2Output, error)
 }
 
-// Manifest represents the structure of manifest.json
-type Manifest struct {
-	Objects []ManifestObject `json:"objects"`
+// ManifestEntry represents a keyspace/table entry in the manifest
+type ManifestEntry struct {
+	Keyspace     string           `json:"keyspace"`
+	ColumnFamily string           `json:"columnfamily"`
+	Objects      []ManifestObject `json:"objects"`
 }
 
 // ManifestObject represents an object entry in the manifest
 type ManifestObject struct {
 	Path string `json:"path"`
+	MD5  string `json:"MD5"`
+	Size int64  `json:"size"`
+}
+
+// Manifest represents the parsed manifest - a flat list of all object paths
+type Manifest struct {
+	Objects []ManifestObject
 }
 
 // extractHostnamePath extracts [cluster]/[hostname]/ from a manifest key
@@ -44,12 +53,20 @@ func extractHostnamePath(manifestKey string) (string, error) {
 }
 
 // parseManifest parses manifest JSON data
+// Medusa manifests are arrays of keyspace entries, each containing objects
 func parseManifest(data []byte) (*Manifest, error) {
-	var manifest Manifest
-	if err := json.Unmarshal(data, &manifest); err != nil {
+	var entries []ManifestEntry
+	if err := json.Unmarshal(data, &entries); err != nil {
 		return nil, fmt.Errorf("failed to parse manifest: %w", err)
 	}
-	return &manifest, nil
+
+	// Flatten all objects from all keyspace entries
+	var allObjects []ManifestObject
+	for _, entry := range entries {
+		allObjects = append(allObjects, entry.Objects...)
+	}
+
+	return &Manifest{Objects: allObjects}, nil
 }
 
 // needsRetentionUpdate determines if retention should be updated based on current and required dates
@@ -108,7 +125,14 @@ func main() {
 		}
 
 		for _, obj := range manifest.Objects {
-			objectKey := hostnamePath + obj.Path
+			// Check if path already includes the hostname prefix (new manifest format)
+			// or if it's a relative path that needs the prefix (old format)
+			var objectKey string
+			if strings.HasPrefix(obj.Path, hostnamePath) {
+				objectKey = obj.Path
+			} else {
+				objectKey = hostnamePath + obj.Path
+			}
 
 			needsUpdate, err := checkRetention(ctx, client, *bucket, objectKey, retentionUntil)
 			if err != nil {

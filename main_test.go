@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -112,27 +113,37 @@ func TestParseManifest(t *testing.T) {
 		wantErr bool
 	}{
 		{
-			name: "valid manifest with objects",
-			data: []byte(`{"objects":[{"path":"data/keyspace/table/file1.db"},{"path":"data/keyspace/table/file2.db"}]}`),
+			name: "valid manifest with objects (Medusa format)",
+			data: []byte(`[{"keyspace":"ks1","columnfamily":"table1","objects":[{"path":"data/keyspace/table/file1.db","MD5":"abc123","size":100}]},{"keyspace":"ks2","columnfamily":"table2","objects":[{"path":"data/keyspace/table/file2.db","MD5":"def456","size":200}]}]`),
 			want: &Manifest{
 				Objects: []ManifestObject{
-					{Path: "data/keyspace/table/file1.db"},
-					{Path: "data/keyspace/table/file2.db"},
+					{Path: "data/keyspace/table/file1.db", MD5: "abc123", Size: 100},
+					{Path: "data/keyspace/table/file2.db", MD5: "def456", Size: 200},
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "sample manifest format with full paths",
+			data: []byte(`[{"keyspace":"keyspace_name","columnfamily":"table-cb752354d0f211f0bde0457410cd7650","objects":[{"path":"cluster_name/node_name/data/keyspace_name/table-cb752354d0f211f0bde0457410cd7650/da-3gvx_0rt1_0nkru2ruxfzfltnvhb-bti-Statistics.db","MD5":"5d05c4c7ecafccdf1b4f1d06c4c3032e","size":4821}]}]`),
+			want: &Manifest{
+				Objects: []ManifestObject{
+					{Path: "cluster_name/node_name/data/keyspace_name/table-cb752354d0f211f0bde0457410cd7650/da-3gvx_0rt1_0nkru2ruxfzfltnvhb-bti-Statistics.db", MD5: "5d05c4c7ecafccdf1b4f1d06c4c3032e", Size: 4821},
 				},
 			},
 			wantErr: false,
 		},
 		{
 			name: "empty objects array",
-			data: []byte(`{"objects":[]}`),
+			data: []byte(`[{"keyspace":"ks1","columnfamily":"table1","objects":[]}]`),
 			want: &Manifest{
-				Objects: []ManifestObject{},
+				Objects: nil,
 			},
 			wantErr: false,
 		},
 		{
-			name:    "empty JSON",
-			data:    []byte(`{}`),
+			name:    "empty array",
+			data:    []byte(`[]`),
 			want:    &Manifest{},
 			wantErr: false,
 		},
@@ -376,7 +387,7 @@ func TestDownloadManifest(t *testing.T) {
 			setupMock: func() *MockS3Client {
 				return &MockS3Client{
 					GetObjectFunc: func(ctx context.Context, params *s3.GetObjectInput, optFns ...func(*s3.Options)) (*s3.GetObjectOutput, error) {
-						body := `{"objects":[{"path":"data/ks/table/file.db"}]}`
+						body := `[{"keyspace":"ks","columnfamily":"table","objects":[{"path":"data/ks/table/file.db","MD5":"abc","size":100}]}]`
 						return &s3.GetObjectOutput{
 							Body: io.NopCloser(strings.NewReader(body)),
 						}, nil
@@ -640,6 +651,36 @@ func TestUpdateRetention(t *testing.T) {
 	}
 }
 
+// Test parsing the sample manifest file
+func TestParseSampleManifest(t *testing.T) {
+	data, err := os.ReadFile("sample_manifest.json")
+	if err != nil {
+		t.Skipf("sample_manifest.json not found: %v", err)
+	}
+
+	manifest, err := parseManifest(data)
+	if err != nil {
+		t.Fatalf("parseManifest() error = %v", err)
+	}
+
+	if len(manifest.Objects) != 1 {
+		t.Errorf("expected 1 object, got %d", len(manifest.Objects))
+	}
+
+	expectedPath := "cluster_name/node_name/data/keyspace_name/table-cb752354d0f211f0bde0457410cd7650/da-3gvx_0rt1_0nkru2ruxfzfltnvhb-bti-Statistics.db"
+	if manifest.Objects[0].Path != expectedPath {
+		t.Errorf("path = %q, want %q", manifest.Objects[0].Path, expectedPath)
+	}
+
+	if manifest.Objects[0].MD5 != "5d05c4c7ecafccdf1b4f1d06c4c3032e" {
+		t.Errorf("MD5 = %q, want %q", manifest.Objects[0].MD5, "5d05c4c7ecafccdf1b4f1d06c4c3032e")
+	}
+
+	if manifest.Objects[0].Size != 4821 {
+		t.Errorf("Size = %d, want %d", manifest.Objects[0].Size, 4821)
+	}
+}
+
 // Test object path construction
 func TestObjectPathConstruction(t *testing.T) {
 	tests := []struct {
@@ -649,16 +690,22 @@ func TestObjectPathConstruction(t *testing.T) {
 		expectedPath string
 	}{
 		{
-			name:         "standard medusa backup path",
+			name:         "relative path needs prefix",
 			manifestKey:  "links/links-us-default-sts-8/medusa-backup-schedule-1764858600/meta/manifest.json",
 			objectPath:   "data/keyspace/table/mc-1-big-Data.db",
 			expectedPath: "links/links-us-default-sts-8/data/keyspace/table/mc-1-big-Data.db",
 		},
 		{
-			name:         "different cluster and host",
+			name:         "different cluster and host relative path",
 			manifestKey:  "production/node-1/backup-2024/meta/manifest.json",
 			objectPath:   "data/system/local/mc-1-big-Data.db",
 			expectedPath: "production/node-1/data/system/local/mc-1-big-Data.db",
+		},
+		{
+			name:         "full path already includes prefix",
+			manifestKey:  "cluster_name/node_name/backup-2024/meta/manifest.json",
+			objectPath:   "cluster_name/node_name/data/keyspace_name/table/file.db",
+			expectedPath: "cluster_name/node_name/data/keyspace_name/table/file.db",
 		},
 	}
 
@@ -668,7 +715,13 @@ func TestObjectPathConstruction(t *testing.T) {
 			if err != nil {
 				t.Fatalf("extractHostnamePath() error = %v", err)
 			}
-			objectKey := hostnamePath + tt.objectPath
+			// Replicate the logic from main.go
+			var objectKey string
+			if strings.HasPrefix(tt.objectPath, hostnamePath) {
+				objectKey = tt.objectPath
+			} else {
+				objectKey = hostnamePath + tt.objectPath
+			}
 			if objectKey != tt.expectedPath {
 				t.Errorf("object path = %v, want %v", objectKey, tt.expectedPath)
 			}

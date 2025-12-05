@@ -1,0 +1,13 @@
+[
+  {
+    "keyspace": "keyspace_name",
+    "columnfamily": "table-cb752354d0f211f0bde0457410cd7650",
+    "objects": [
+      {
+        "path": "cluster_name/node_name/data/keyspace_name/table-cb752354d0f211f0bde0457410cd7650/da-3gvx_0rt1_0nkru2ruxfzfltnvhb-bti-Statistics.db",
+        "MD5": "5d05c4c7ecafccdf1b4f1d06c4c3032e",
+        "size": 4821
+      }
+    ]
+  }
+]
