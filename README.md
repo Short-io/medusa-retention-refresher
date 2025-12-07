@@ -41,7 +41,7 @@ docker run --rm \
   -e AWS_SECRET_ACCESS_KEY \
   -e AWS_REGION \
   ghcr.io/short-io/medusa-retention-refresher:latest \
-  -bucket my-backups -cluster prod-cassandra -retention 30
+  -bucket my-backups -cluster prod-cassandra -min-retention 7 -max-retention 30
 ```
 
 ### Kubernetes
@@ -66,7 +66,8 @@ spec:
             args:
             - -bucket=my-backups
             - -cluster=prod-cassandra
-            - -retention=30
+            - -min-retention=7
+            - -max-retention=30
             env:
             - name: AWS_REGION
               value: us-east-1
@@ -91,7 +92,7 @@ metadata:
 ## Usage
 
 ```bash
-./medusa-retention-refresher -bucket <bucket> -cluster <cluster> -retention <days> [-dry-run]
+./medusa-retention-refresher -bucket <bucket> -cluster <cluster> -min-retention <days> -max-retention <days> [-dry-run]
 ```
 
 ### Flags
@@ -100,19 +101,20 @@ metadata:
 |------|----------|-------------|
 | `-bucket` | Yes | S3 bucket name containing the backups |
 | `-cluster` | Yes | Cassandra cluster name (S3 prefix) |
-| `-retention` | Yes | Retention period in days from today |
+| `-min-retention` | Yes | Minimum retention threshold in days - objects with retention expiring before this many days from now will be updated |
+| `-max-retention` | Yes | Target retention in days - new retention period applied when updating objects |
 | `-dry-run` | No | Preview changes without applying them |
 
 ### Examples
 
-Preview retention updates for a 30-day retention policy:
+Preview changes: extend retention to 30 days for objects expiring within 7 days:
 ```bash
-./medusa-retention-refresher -bucket my-backups -cluster prod-cassandra -retention 30 -dry-run
+./medusa-retention-refresher -bucket my-backups -cluster prod-cassandra -min-retention 7 -max-retention 30 -dry-run
 ```
 
-Apply 90-day retention to all backups:
+Apply 90-day retention to objects expiring within 14 days:
 ```bash
-./medusa-retention-refresher -bucket my-backups -cluster prod-cassandra -retention 90
+./medusa-retention-refresher -bucket my-backups -cluster prod-cassandra -min-retention 14 -max-retention 90
 ```
 
 ## Expected S3 Structure

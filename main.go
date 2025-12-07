@@ -80,12 +80,17 @@ func needsRetentionUpdate(currentRetention *time.Time, requiredUntil time.Time) 
 func main() {
 	bucket := flag.String("bucket", "", "S3 bucket name")
 	cluster := flag.String("cluster", "", "Cluster name")
-	retentionDays := flag.Int("retention", 0, "Retention interval in days")
+	minRetentionDays := flag.Int("min-retention", 0, "Minimum retention threshold in days - objects expiring before this will be updated")
+	maxRetentionDays := flag.Int("max-retention", 0, "Maximum retention in days - target retention when updating objects")
 	dryRun := flag.Bool("dry-run", false, "Dry run mode - don't actually update retention")
 	flag.Parse()
 
-	if *bucket == "" || *cluster == "" || *retentionDays <= 0 {
-		log.Fatal("Usage: go run main.go -bucket <bucket> -cluster <cluster> -retention <days> [-dry-run]")
+	if *bucket == "" || *cluster == "" || *minRetentionDays <= 0 || *maxRetentionDays <= 0 {
+		log.Fatal("Usage: go run main.go -bucket <bucket> -cluster <cluster> -min-retention <days> -max-retention <days> [-dry-run]")
+	}
+
+	if *minRetentionDays > *maxRetentionDays {
+		log.Fatal("min-retention must be less than or equal to max-retention")
 	}
 
 	ctx := context.Background()
@@ -105,7 +110,8 @@ func main() {
 
 	log.Printf("Found %d manifests", len(manifests))
 
-	retentionUntil := time.Now().AddDate(0, 0, *retentionDays)
+	minRetentionThreshold := time.Now().AddDate(0, 0, *minRetentionDays)
+	retentionUntil := time.Now().AddDate(0, 0, *maxRetentionDays)
 
 	for _, manifestKey := range manifests {
 		log.Printf("Processing manifest: %s", manifestKey)
@@ -134,7 +140,7 @@ func main() {
 				objectKey = hostnamePath + obj.Path
 			}
 
-			needsUpdate, err := checkRetention(ctx, client, *bucket, objectKey, retentionUntil)
+			needsUpdate, err := checkRetention(ctx, client, *bucket, objectKey, minRetentionThreshold)
 			if err != nil {
 				log.Printf("Error checking retention for %s: %v", objectKey, err)
 				continue

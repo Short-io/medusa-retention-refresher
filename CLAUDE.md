@@ -9,7 +9,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 go build -o medusa-retention-refresher .
 
 # Run directly
-go run main.go -bucket <bucket> -cluster <cluster> -retention <days> [-dry-run]
+go run main.go -bucket <bucket> -cluster <cluster> -min-retention <days> -max-retention <days> [-dry-run]
 
 # Manage dependencies
 go mod tidy
@@ -22,7 +22,7 @@ A CLI utility that refreshes S3 Object Lock retention periods for Cassandra back
 1. Scans an S3 bucket for Medusa backup manifests (`[cluster]/[hostname]/[backup_name]/meta/manifest.json`)
 2. Parses each manifest to get the list of backup objects
 3. Checks each object's current retention period
-4. Extends retention to the specified number of days from now if the current retention expires sooner
+4. Extends retention to max-retention days if the current retention expires before min-retention days from now
 
 **Backup structure:**
 - Manifests: `[cluster]/[hostname]/[backup_name]/meta/manifest.json`
@@ -34,5 +34,6 @@ Uses S3 Object Lock in GOVERNANCE mode.
 
 - `-bucket`: S3 bucket name containing backups
 - `-cluster`: Cassandra cluster name (used as the S3 prefix)
-- `-retention`: Number of days to set retention from today
+- `-min-retention`: Minimum retention threshold in days - objects expiring before this will be updated
+- `-max-retention`: Target retention in days - new retention period when updating objects
 - `-dry-run`: Optional flag to preview changes without applying them
